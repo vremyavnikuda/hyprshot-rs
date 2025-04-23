@@ -2,6 +2,13 @@
 name = "hyprshot-rs"
 version = "0.1.0"
 edition = "2024"
+description = "A utility to easily take screenshots in Hyprland using your mouse"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/vremyavnikuda/hyprshot-rs"
+homepage = "https://github.com/vremyavnikuda/hyprshot-rs"
+keywords = ["hyprland", "screenshot", "wayland", "cli"]
+categories = ["command-line-utilities", "graphics"]
+readme = "README.md"
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
@@ -10,3 +17,6 @@ notify-rust = "4.11"
 anyhow = "1.0"
 dirs = "5.0"
 chrono = "0.4"
+
+[package.metadata]
+bin = [{ name = "hyprshot-rs", path = "src/main.rs" }]

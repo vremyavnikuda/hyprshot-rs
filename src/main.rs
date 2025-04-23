@@ -52,7 +52,20 @@ struct Args {
 
 impl std::fmt::Debug for Args {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Args").field("help", &self.help).field("mode", &self.mode).field("output_folder", &self.output_folder).field("filename", &self.filename).field("delay", &self.delay).field("freeze", &self.freeze).field("debug", &self.debug).field("silent", &self.silent).field("raw", &self.raw).field("notif_timeout", &self.notif_timeout).field("clipboard_only", &self.clipboard_only).field("command", &self.command).finish()
+        f.debug_struct("Args")
+            .field("help", &self.help)
+            .field("mode", &self.mode)
+            .field("output_folder", &self.output_folder)
+            .field("filename", &self.filename)
+            .field("delay", &self.delay)
+            .field("freeze", &self.freeze)
+            .field("debug", &self.debug)
+            .field("silent", &self.silent)
+            .field("raw", &self.raw)
+            .field("notif_timeout", &self.notif_timeout)
+            .field("clipboard_only", &self.clipboard_only)
+            .field("command", &self.command)
+            .finish()
     }
 }
 
@@ -83,7 +96,6 @@ fn main() -> Result<()> {
     let delay = args.delay.unwrap_or(0);
     let command = if args.command.is_empty() { None } else { Some(args.command) };
 
-    // Determine mode
     let mut option: Option<Mode> = None;
     let mut current = false;
     let mut selected_monitor: Option<String> = None;
@@ -102,7 +114,6 @@ fn main() -> Result<()> {
 
     let option = option.context("A mode is required (output, region, window)")?;
 
-    // Set save path
     let save_dir = args.output_folder.unwrap_or_else(|| {
         dirs::picture_dir().unwrap_or_else(|| PathBuf::from("~"))
     });
@@ -115,7 +126,6 @@ fn main() -> Result<()> {
         eprintln!("Saving in: {}", save_fullpath.display());
     }
 
-    // Freeze screen if requested
     let hyprpicker_pid = if freeze && Command::new("hyprpicker").output().is_ok() {
         let pid = Command::new("hyprpicker")
             .args(["-r", "-z"])
@@ -128,12 +138,10 @@ fn main() -> Result<()> {
         None
     };
 
-    // Handle delay
     if delay > 0 {
         sleep(Duration::from_secs(delay));
     }
 
-    // Capture screenshot
     let geometry = match option {
         Mode::Output => {
             if current {
@@ -141,10 +149,10 @@ fn main() -> Result<()> {
             } else if let Some(monitor) = selected_monitor {
                 grab_selected_output(&monitor, debug)?
             } else {
-                grab_output()?
+                grab_output(debug)?
             }
         }
-        Mode::Region => grab_region()?,
+        Mode::Region => grab_region(debug)?,
         Mode::Window => {
             let geo = if current {
                 grab_active_window(debug)?
@@ -156,10 +164,17 @@ fn main() -> Result<()> {
         _ => unreachable!(),
     };
 
-    // Save or output screenshot
-    save_geometry(&geometry, &save_fullpath, clipboard_only, raw, command, silent, notif_timeout, debug)?;
+    save_geometry(
+        &geometry,
+        &save_fullpath,
+        clipboard_only,
+        raw,
+        command,
+        silent,
+        notif_timeout,
+        debug,
+    )?;
 
-    // Clean up hyprpicker if running
     if let Some(pid) = hyprpicker_pid {
         Command::new("kill")
             .arg(pid.to_string())
@@ -226,24 +241,46 @@ fn is_valid_monitor(name: &str) -> Result<bool> {
 
 fn trim(geometry: &str, debug: bool) -> Result<String> {
     if debug {
-        eprintln!("Geometry: {}", geometry);
+        eprintln!("Input geometry: {}", geometry);
     }
 
     let parts: Vec<&str> = geometry.split(' ').collect();
     if parts.len() != 2 {
-        return Err(anyhow::anyhow!("Invalid geometry format"));
+        return Err(anyhow::anyhow!(
+            "Invalid geometry format: expected 'x,y wxh', got '{}'",
+            geometry
+        ));
     }
 
     let xy: Vec<&str> = parts[0].split(',').collect();
     let wh: Vec<&str> = parts[1].split('x').collect();
     if xy.len() != 2 || wh.len() != 2 {
-        return Err(anyhow::anyhow!("Invalid geometry format"));
+        return Err(anyhow::anyhow!(
+            "Invalid geometry format: expected 'x,y wxh', got '{}'",
+            geometry
+        ));
     }
 
-    let x: i32 = xy[0].parse()?;
-    let y: i32 = xy[1].parse()?;
-    let width: i32 = wh[0].parse()?;
-    let height: i32 = wh[1].parse()?;
+    let x: i32 = xy[0]
+        .parse()
+        .context(format!("Failed to parse x coordinate from '{}'", xy[0]))?;
+    let y: i32 = xy[1]
+        .parse()
+        .context(format!("Failed to parse y coordinate from '{}'", xy[1]))?;
+    let width: i32 = wh[0]
+        .parse()
+        .context(format!("Failed to parse width from '{}'", wh[0]))?;
+    let height: i32 = wh[1]
+        .parse()
+        .context(format!("Failed to parse height from '{}'", wh[1]))?;
+
+    if width <= 0 || height <= 0 {
+        return Err(anyhow::anyhow!(
+            "Invalid geometry dimensions: width={} or height={} is non-positive",
+            width,
+            height
+        ));
+    }
 
     let monitors_output = Command::new("hyprctl")
         .arg("monitors")
@@ -322,9 +359,17 @@ fn trim(geometry: &str, debug: bool) -> Result<String> {
         cropped_height += y - min_y;
     }
 
+    if cropped_width <= 0 || cropped_height <= 0 {
+        return Err(anyhow::anyhow!(
+            "Invalid cropped dimensions: width={} or height={}",
+            cropped_width,
+            cropped_height
+        ));
+    }
+
     let cropped = format!("{},{}\t{}x{}", cropped_x, cropped_y, cropped_width, cropped_height);
     if debug {
-        eprintln!("Crop: {}", cropped);
+        eprintln!("Cropped geometry: {}", cropped);
     }
     Ok(cropped)
 }
@@ -355,30 +400,40 @@ fn save_geometry(
     }
 
     if !clipboard_only {
-        create_dir_all(save_fullpath.parent().unwrap())?;
-        Command::new("grim")
+        create_dir_all(save_fullpath.parent().unwrap())
+            .context("Failed to create screenshot directory")?;
+        let grim_status = Command::new("grim")
             .arg("-g")
             .arg(geometry)
             .arg(save_fullpath)
             .status()
-            .context("Failed to save screenshot with grim")?;
+            .context("Failed to run grim")?;
+        if !grim_status.success() {
+            return Err(anyhow::anyhow!("grim failed to capture screenshot"));
+        }
 
-        Command::new("wl-copy")
+        let wl_copy_status = Command::new("wl-copy")
             .arg("--type")
             .arg("image/png")
-            .stdin(
-                std::fs::File::open(save_fullpath)
-                    .context("Failed to open screenshot for wl-copy")?,
-            )
+            .stdin(std::fs::File::open(save_fullpath).context(format!(
+                "Failed to open screenshot file '{}'",
+                save_fullpath.display()
+            ))?)
             .status()
-            .context("Failed to copy to clipboard with wl-copy")?;
+            .context("Failed to run wl-copy")?;
+        if !wl_copy_status.success() {
+            return Err(anyhow::anyhow!("wl-copy failed to copy screenshot"));
+        }
 
         if let Some(cmd) = command {
-            Command::new(&cmd[0])
+            let cmd_status = Command::new(&cmd[0])
                 .args(&cmd[1..])
                 .arg(save_fullpath)
                 .status()
-                .context("Failed to run command with screenshot")?;
+                .context(format!("Failed to run command '{}'", cmd[0]))?;
+            if !cmd_status.success() {
+                return Err(anyhow::anyhow!("Command '{}' failed", cmd[0]));
+            }
         }
     } else {
         let grim_output = Command::new("grim")
@@ -387,24 +442,38 @@ fn save_geometry(
             .arg("-")
             .output()
             .context("Failed to run grim")?;
+        if !grim_output.status.success() {
+            return Err(anyhow::anyhow!("grim failed to capture screenshot"));
+        }
 
-        Command::new("wl-copy")
+        let mut wl_copy = Command::new("wl-copy")
             .arg("--type")
             .arg("image/png")
             .stdin(Stdio::piped())
             .spawn()
-            .context("Failed to start wl-copy")?
+            .context("Failed to start wl-copy")?;
+        wl_copy
             .stdin
+            .as_mut()
             .unwrap()
             .write_all(&grim_output.stdout)
-            .context("Failed to copy to clipboard with wl-copy")?;
+            .context("Failed to write to wl-copy stdin")?;
+        let wl_copy_status = wl_copy
+            .wait()
+            .context("Failed to wait for wl-copy")?;
+        if !wl_copy_status.success() {
+            return Err(anyhow::anyhow!("wl-copy failed to copy screenshot"));
+        }
     }
 
     if !silent {
         let message = if clipboard_only {
             "Image copied to the clipboard".to_string()
         } else {
-            format!("Image saved in <i>{}</i> and copied to the clipboard.", save_fullpath.display())
+            format!(
+                "Image saved in <i>{}</i> and copied to the clipboard.",
+                save_fullpath.display()
+            )
         };
         Notification::new()
             .summary("Screenshot saved")
@@ -412,18 +481,32 @@ fn save_geometry(
             .icon(save_fullpath.to_str().unwrap_or("screenshot"))
             .timeout(notif_timeout as i32)
             .appname("Hyprshot-rs")
-            .show()?;
+            .show()
+            .context("Failed to show notification")?;
     }
 
     Ok(())
 }
 
-fn grab_output() -> Result<String> {
+fn grab_output(debug: bool) -> Result<String> {
     let output = Command::new("slurp")
         .arg("-or")
         .output()
         .context("Failed to run slurp")?;
-    Ok(String::from_utf8(output.stdout)?.trim().to_string())
+    if !output.status.success() {
+        return Err(anyhow::anyhow!("slurp failed to select output"));
+    }
+    let geometry = String::from_utf8(output.stdout)
+        .context("slurp output is not valid UTF-8")?
+        .trim()
+        .to_string();
+    if debug {
+        eprintln!("Output geometry: {}", geometry);
+    }
+    if geometry.is_empty() {
+        return Err(anyhow::anyhow!("slurp returned empty geometry"));
+    }
+    Ok(geometry)
 }
 
 fn grab_active_output(debug: bool) -> Result<String> {
@@ -451,11 +534,7 @@ fn grab_active_output(debug: bool) -> Result<String> {
 
     let current_monitor = monitors
         .as_array()
-        .and_then(|arr| {
-            arr.iter().find(|m| {
-                m["activeWorkspace"]["id"] == active_workspace["id"]
-            })
-        })
+        .and_then(|arr| arr.iter().find(|m| m["activeWorkspace"]["id"] == active_workspace["id"]))
         .context("No matching monitor found")?;
 
     if debug {
@@ -468,7 +547,17 @@ fn grab_active_output(debug: bool) -> Result<String> {
     let height = current_monitor["height"].as_i64().unwrap_or(0) as f64;
     let scale = current_monitor["scale"].as_f64().unwrap_or(1.0);
 
-    Ok(format!("{},{} {}x{}", x, y, (width / scale).round() as i32, (height / scale).round() as i32))
+    let geometry = format!(
+        "{},{} {}x{}",
+        x,
+        y,
+        (width / scale).round() as i32,
+        (height / scale).round() as i32
+    );
+    if debug {
+        eprintln!("Active output geometry: {}", geometry);
+    }
+    Ok(geometry)
 }
 
 fn grab_selected_output(monitor: &str, debug: bool) -> Result<String> {
@@ -484,10 +573,10 @@ fn grab_selected_output(monitor: &str, debug: bool) -> Result<String> {
     let monitor_data = monitors
         .as_array()
         .and_then(|arr| arr.iter().find(|m| m["name"].as_str() == Some(monitor)))
-        .context("Monitor not found")?;
+        .context(format!("Monitor '{}' not found", monitor))?;
 
     if debug {
-        eprintln!("Capturing: {}", monitor);
+        eprintln!("Capturing monitor: {}", monitor);
     }
 
     let x = monitor_data["x"].as_i64().unwrap_or(0);
@@ -496,15 +585,38 @@ fn grab_selected_output(monitor: &str, debug: bool) -> Result<String> {
     let height = monitor_data["height"].as_i64().unwrap_or(0) as f64;
     let scale = monitor_data["scale"].as_f64().unwrap_or(1.0);
 
-    Ok(format!("{},{} {}x{}", x, y, (width / scale).round() as i32, (height / scale).round() as i32))
+    let geometry = format!(
+        "{},{} {}x{}",
+        x,
+        y,
+        (width / scale).round() as i32,
+        (height / scale).round() as i32
+    );
+    if debug {
+        eprintln!("Selected output geometry: {}", geometry);
+    }
+    Ok(geometry)
 }
 
-fn grab_region() -> Result<String> {
+fn grab_region(debug: bool) -> Result<String> {
     let output = Command::new("slurp")
         .arg("-d")
         .output()
         .context("Failed to run slurp")?;
-    Ok(String::from_utf8(output.stdout)?.trim().to_string())
+    if !output.status.success() {
+        return Err(anyhow::anyhow!("slurp failed to select region"));
+    }
+    let geometry = String::from_utf8(output.stdout)
+        .context("slurp output is not valid UTF-8")?
+        .trim()
+        .to_string();
+    if debug {
+        eprintln!("Region geometry: {}", geometry);
+    }
+    if geometry.is_empty() {
+        return Err(anyhow::anyhow!("slurp returned empty geometry"));
+    }
+    Ok(geometry)
 }
 
 fn grab_window(debug: bool) -> Result<String> {
@@ -574,7 +686,11 @@ fn grab_window(debug: bool) -> Result<String> {
         .join("\n");
 
     if debug {
-        eprintln!("Boxes:\n{}", boxes);
+        eprintln!("Window boxes:\n{}", boxes);
+    }
+
+    if boxes.is_empty() {
+        return Err(anyhow::anyhow!("No windows found to capture"));
     }
 
     let mut slurp = Command::new("slurp")
@@ -591,10 +707,22 @@ fn grab_window(debug: bool) -> Result<String> {
         .write_all(boxes.as_bytes())
         .context("Failed to write to slurp stdin")?;
 
-    let output = slurp
-        .wait_with_output()
-        .context("Failed to run slurp")?;
-    Ok(String::from_utf8(output.stdout)?.trim().to_string())
+    let output = slurp.wait_with_output().context("Failed to run slurp")?;
+    if !output.status.success() {
+        return Err(anyhow::anyhow!("slurp failed to select window"));
+    }
+
+    let geometry = String::from_utf8(output.stdout)
+        .context("slurp output is not valid UTF-8")?
+        .trim()
+        .to_string();
+    if debug {
+        eprintln!("Window geometry: {}", geometry);
+    }
+    if geometry.is_empty() {
+        return Err(anyhow::anyhow!("slurp returned empty geometry"));
+    }
+    Ok(geometry)
 }
 
 fn grab_active_window(debug: bool) -> Result<String> {
@@ -607,20 +735,33 @@ fn grab_active_window(debug: bool) -> Result<String> {
             .stdout,
     )?;
 
-    let at = active_window["at"].as_array().context("Invalid active window data")?;
-    let size = active_window["size"].as_array().context("Invalid active window data")?;
-
-    let geometry = format!(
-        "{},{} {}x{}",
-        at[0].as_i64().unwrap_or(0),
-        at[1].as_i64().unwrap_or(0),
-        size[0].as_i64().unwrap_or(0),
-        size[1].as_i64().unwrap_or(0)
-    );
-
     if debug {
-        eprintln!("Box:\n{}", geometry);
+        eprintln!("Active window: {}", active_window);
     }
 
+    let at = active_window["at"]
+        .as_array()
+        .context("Invalid active window data: missing 'at' field")?;
+    let size = active_window["size"]
+        .as_array()
+        .context("Invalid active window data: missing 'size' field")?;
+
+    let x = at[0].as_i64().context("Invalid x coordinate")?;
+    let y = at[1].as_i64().context("Invalid y coordinate")?;
+    let width = size[0].as_i64().context("Invalid width")?;
+    let height = size[1].as_i64().context("Invalid height")?;
+
+    if width <= 0 || height <= 0 {
+        return Err(anyhow::anyhow!(
+            "Invalid window dimensions: width={} or height={}",
+            width,
+            height
+        ));
+    }
+
+    let geometry = format!("{},{} {}x{}", x, y, width, height);
+    if debug {
+        eprintln!("Active window geometry: {}", geometry);
+    }
     Ok(geometry)
 }
