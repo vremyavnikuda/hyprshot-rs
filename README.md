@@ -1,54 +1,67 @@
 # Hyprshot-rs
 
-   A utility to easily take screenshots in Hyprland using your mouse.
+A utility to easily take screenshots in Hyprland using your mouse.
 
-   ## Features
-   - Capture screenshots of windows, regions, or monitors.
-   - Save screenshots to a specified folder or copy to the clipboard.
-   - Support for delayed captures, screen freezing, and custom commands.
+## Features
+- Capture screenshots of windows, regions, or monitors.
+- Save screenshots to a specified folder or copy to the clipboard.
+- Support for delayed captures, screen freezing, and custom commands.
 
-   ## Installation
+## Installation
 
-   Install via Cargo:
-   ```bash
-   cargo install hyprshot-rs
-   ```
+Install via Cargo:
+```bash
+cargo install hyprshot-rs
+```
 
-   Ensure the following dependencies are installed:
-   - `grim`
-   - `slurp`
-   - `wl-clipboard`
-   - `hyprland`
-   - `hyprpicker` (optional)
+Ensure the following dependencies are installed:
+- `grim`
+- `slurp`
+- `wl-clipboard`
+- `hyprland`
+- `hyprpicker` (optional)
 
-   On Arch Linux:
-   ```bash
-   sudo pacman -S grim slurp wl-clipboard hyprland hyprpicker
-   ```
+On Arch Linux:
+```bash
+sudo pacman -S grim slurp wl-clipboard hyprland hyprpicker
+```
+___
+## Usage
 
-   ## Usage
+```bash
+hyprshot-rs [options ..] [-m [mode] ..] -- [command]
+```
+```
+possible values: output, window, region, active
+```
 
-   ```bash
-   hyprshot-rs [options ..] [-m [mode] ..] -- [command]
-   ```
+Possible values:
+- Capture a window:
+```bash
+// error wayland
+// dev
+hyprshot-rs -m window
+```
+- To take a screenshot of a specific area of the screen, use:
+```
+hyprshot-rs -m region
+```
+- If you have 2 or more monitors and want to take a screenshot of the workspace on a specific monitor: 
+```
+hyprshot-rs -m output
+```
+- Quick capture (instant screenshot of the workspace where the cursor is):
+```
+hyprshot-rs -m active -m output
+```
+- Take a screenshot of a selected area and save it in the current directory:
+~/repository
+```
+hyprshot-rs -m region -r > output.png
+```
+redirects the output to output.png in your current working directory. So if you're currently in ~/repository when running this command, that's where the screenshot will be saved, not in the default ~/Pictures directory.
 
-   Examples:
-   - Capture a window:
-     ```bash
-     hyprshot-rs -m window
-     ```
-   - Capture active window to clipboard:
-     ```bash
-     hyprshot-rs -m window -m active --clipboard-only
-     ```
-   - Capture a specific monitor:
-     ```bash
-     hyprshot-rs -m output -m DP-1
-     ```
-     
-> где DP-1 активный дисплей
+Run `hyprshot-rs --help` or `hyprshot-rs -h`for more options.
 
-   Run `hyprshot-rs --help` for more options.
-
-   ## License
-   Licensed under either MIT or Apache-2.0 at your option.
+## License
+Licensed under either [MIT](LICENSE.md).
