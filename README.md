@@ -43,25 +43,32 @@ Possible values:
 hyprshot-rs -m window
 ```
 - To take a screenshot of a specific area of the screen, use:
-```
+```bash
 hyprshot-rs -m region
 ```
 - If you have 2 or more monitors and want to take a screenshot of the workspace on a specific monitor: 
-```
+```bash
 hyprshot-rs -m output
 ```
 - Quick capture (instant screenshot of the workspace where the cursor is):
-```
+```bash
 hyprshot-rs -m active -m output
 ```
 - Take a screenshot of a selected area and save it in the current directory:
 ~/repository
-```
+```bash
 hyprshot-rs -m region -r > output.png
 ```
 redirects the output to output.png in your current working directory. So if you're currently in ~/repository when running this command, that's where the screenshot will be saved, not in the default ~/Pictures directory.
 
 Run `hyprshot-rs --help` or `hyprshot-rs -h`for more options.
 
+Binding to specific key combinations
+Add to the hyprland.conf configuration file:
+```cfg
+bind = , PRINT , exec , hyprshot-rs -m active -m output
+bind = $mainMod, PRINT , exec , hyprshot-rs -m region
+bind = $shiftMod , PRINT , exec ,  hyprshot-rs -m output
+```
+Based on the implementation: [Hypershot](https://github.com/Gustash/Hyprshot)
 ## License
-Licensed under either [MIT](LICENSE.md).
