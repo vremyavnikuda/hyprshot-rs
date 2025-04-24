@@ -1,3 +1,5 @@
+[![Crates.io Version](https://img.shields.io/crates/v/hyprshot-rs.svg)](https://crates.io/crates/hyprshot-rs) [![Crates.io License](https://img.shields.io/crates/l/hyprshot-rs.svg)](https://crates.io/crates/hyprshot-rs)
+___
 # Hyprshot-rs
 
 A utility to easily take screenshots in Hyprland using your mouse.
