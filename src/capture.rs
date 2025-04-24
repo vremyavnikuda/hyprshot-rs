@@ -1,4 +1,3 @@
-//src/capture.rs
 use anyhow::{Context, Result};
 use serde_json::Value;
 use std::{io::Write, process::{Command, Stdio}};
@@ -193,7 +192,7 @@ pub fn grab_window(debug: bool) -> Result<String> {
             let width = size[0].as_i64()?;
             let height = size[1].as_i64()?;
             if width <= 0 || height <= 0 {
-                return None; // Пропускаем окна с неположительными размерами
+                return None;
             }
             Some(format!(
                 "{},{} {}x{} {}",

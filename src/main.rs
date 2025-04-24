@@ -1,4 +1,3 @@
-//examples/cli.rs
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
 use std::path::PathBuf;

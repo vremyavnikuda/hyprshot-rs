@@ -1,4 +1,3 @@
-//src/save.rs
 use anyhow::{Context, Result};
 use notify_rust::Notification;
 use std::fs::create_dir_all;
