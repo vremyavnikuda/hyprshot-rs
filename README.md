@@ -72,3 +72,4 @@ bind = $shiftMod , PRINT , exec ,  hyprshot-rs -m output
 ```
 Based on the implementation: [Hypershot](https://github.com/Gustash/Hyprshot)
 ## License
+[GPL-3.0](LICENSE.md)
