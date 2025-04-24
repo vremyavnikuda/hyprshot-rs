@@ -38,8 +38,6 @@ possible values: output, window, region, active
 Possible values:
 - Capture a window:
 ```bash
-// error wayland
-// dev
 hyprshot-rs -m window
 ```
 - To take a screenshot of a specific area of the screen, use:
