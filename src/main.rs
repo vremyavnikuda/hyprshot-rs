@@ -289,74 +289,42 @@ fn trim(geometry: &str, debug: bool) -> Result<String> {
         .context("Failed to run hyprctl monitors")?;
     let monitors: Value = serde_json::from_slice(&monitors_output.stdout)?;
 
-    let max_width = monitors
+    let monitor = monitors
         .as_array()
-        .map(|arr| {
-            arr.iter()
-                .map(|m| {
-                    let transform = m["transform"].as_i64().unwrap_or(0);
-                    let x = m["x"].as_i64().unwrap_or(0) as i32;
-                    let width = m["width"].as_i64().unwrap_or(0) as i32;
-                    let height = m["height"].as_i64().unwrap_or(0) as i32;
-                    if transform % 2 == 0 {
-                        x + width
-                    } else {
-                        x + height
-                    }
-                })
-                .max()
-                .unwrap_or(0)
+        .and_then(|arr| {
+            arr.iter().find(|m| {
+                let mon_x = m["x"].as_i64().unwrap_or(0) as i32;
+                let mon_y = m["y"].as_i64().unwrap_or(0) as i32;
+                let mon_width = m["width"].as_i64().unwrap_or(0) as i32;
+                let mon_height = m["height"].as_i64().unwrap_or(0) as i32;
+                x >= mon_x && x < mon_x + mon_width && y >= mon_y && y < mon_y + mon_height
+            })
         })
-        .unwrap_or(0);
+        .context("No monitor found for window coordinates")?;
 
-    let max_height = monitors
-        .as_array()
-        .map(|arr| {
-            arr.iter()
-                .map(|m| {
-                    let transform = m["transform"].as_i64().unwrap_or(0);
-                    let y = m["y"].as_i64().unwrap_or(0) as i32;
-                    let width = m["width"].as_i64().unwrap_or(0) as i32;
-                    let height = m["height"].as_i64().unwrap_or(0) as i32;
-                    if transform % 2 == 0 {
-                        y + height
-                    } else {
-                        y + width
-                    }
-                })
-                .max()
-                .unwrap_or(0)
-        })
-        .unwrap_or(0);
-
-    let min_x = monitors
-        .as_array()
-        .map(|arr| arr.iter().map(|m| m["x"].as_i64().unwrap_or(0) as i32).min().unwrap_or(0))
-        .unwrap_or(0);
-
-    let min_y = monitors
-        .as_array()
-        .map(|arr| arr.iter().map(|m| m["y"].as_i64().unwrap_or(0) as i32).min().unwrap_or(0))
-        .unwrap_or(0);
+    let mon_x = monitor["x"].as_i64().unwrap_or(0) as i32;
+    let mon_y = monitor["y"].as_i64().unwrap_or(0) as i32;
+    let mon_width = monitor["width"].as_i64().unwrap_or(0) as i32;
+    let mon_height = monitor["height"].as_i64().unwrap_or(0) as i32;
 
     let mut cropped_x = x;
     let mut cropped_y = y;
     let mut cropped_width = width;
     let mut cropped_height = height;
 
-    if x + width > max_width {
-        cropped_width = max_width - x;
+    if x + width > mon_x + mon_width {
+        cropped_width = mon_x + mon_width - x;
     }
-    if y + height > max_height {
-        cropped_height = max_height - y;
+    if y + height > mon_y + mon_height {
+        cropped_height = mon_y + mon_height - y;
     }
-    if x < min_x {
-        cropped_x = min_x;
-        cropped_width += x - min_x;
+    if x < mon_x {
+        cropped_x = mon_x;
+        cropped_width -= mon_x - x;
     }
-    if y < min_y {
-        cropped_y = min_y;
-        cropped_height += y - min_y;
+    if y < mon_y {
+        cropped_y = mon_y;
+        cropped_height -= mon_y - y;
     }
 
     if cropped_width <= 0 || cropped_height <= 0 {
@@ -367,14 +335,15 @@ fn trim(geometry: &str, debug: bool) -> Result<String> {
         ));
     }
 
-    let cropped = format!("{},{}\t{}x{}", cropped_x, cropped_y, cropped_width, cropped_height);
+    let cropped = format!("{0},{1} {2}x{3}", cropped_x, cropped_y, cropped_width, cropped_height);
     if debug {
         eprintln!("Cropped geometry: {}", cropped);
     }
     Ok(cropped)
 }
 
-fn save_geometry(
+#[cfg(feature = "grim")]
+fn save_geometry_with_grim(
     geometry: &str,
     save_fullpath: &PathBuf,
     clipboard_only: bool,
@@ -385,7 +354,7 @@ fn save_geometry(
     debug: bool,
 ) -> Result<()> {
     if debug {
-        eprintln!("Saving geometry: {}", geometry);
+        eprintln!("Saving geometry with grim: {}", geometry);
     }
 
     if raw {
@@ -395,6 +364,9 @@ fn save_geometry(
             .arg("-")
             .output()
             .context("Failed to run grim")?;
+        if !output.status.success() {
+            return Err(anyhow::anyhow!("grim failed to capture screenshot"));
+        }
         std::io::stdout().write_all(&output.stdout)?;
         return Ok(());
     }
@@ -458,9 +430,7 @@ fn save_geometry(
             .unwrap()
             .write_all(&grim_output.stdout)
             .context("Failed to write to wl-copy stdin")?;
-        let wl_copy_status = wl_copy
-            .wait()
-            .context("Failed to wait for wl-copy")?;
+        let wl_copy_status = wl_copy.wait().context("Failed to wait for wl-copy")?;
         if !wl_copy_status.success() {
             return Err(anyhow::anyhow!("wl-copy failed to copy screenshot"));
         }
@@ -486,6 +456,291 @@ fn save_geometry(
     }
 
     Ok(())
+}
+
+#[cfg(feature = "native")]
+fn save_geometry_with_native(
+    geometry: &str,
+    save_fullpath: &PathBuf,
+    clipboard_only: bool,
+    raw: bool,
+    command: Option<Vec<String>>,
+    silent: bool,
+    notif_timeout: u32,
+    debug: bool,
+) -> Result<()> {
+    use wayland_client::{
+        protocol::{wl_compositor::WlCompositor, wl_output::WlOutput, wl_shm::WlShm},
+        Connection, Dispatch, QueueHandle,
+    };
+    use wayland_protocols::unstable::screencopy::v1::client::{
+        zwlr_screencopy_frame_v1::ZwlrScreencopyFrameV1,
+        zwlr_screencopy_manager_v1::ZwlrScreencopyManagerV1,
+    };
+    use image::{DynamicImage, ImageBuffer, Rgba};
+
+    if debug {
+        eprintln!("Saving geometry with native Wayland: {}", geometry);
+    }
+
+    let parts: Vec<&str> = geometry.split(' ').collect();
+    if parts.len() != 2 {
+        return Err(anyhow::anyhow!("Invalid geometry format: '{}'", geometry));
+    }
+    let xy: Vec<&str> = parts[0].split(',').collect();
+    let wh: Vec<&str> = parts[1].split('x').collect();
+    let x: i32 = xy[0].parse().context("Invalid x coordinate")?;
+    let y: i32 = xy[1].parse().context("Invalid y coordinate")?;
+    let width: i32 = wh[0].parse().context("Invalid width")?;
+    let height: i32 = wh[1].parse().context("Invalid height")?;
+
+    let conn = Connection::connect_to_env().context("Failed to connect to Wayland")?;
+    let mut event_queue = conn.new_event_queue();
+    let qh = event_queue.handle();
+
+    let display = conn.display();
+    let globals = conn
+        .get_registry(&qh, ())
+        .context("Failed to get Wayland registry")?;
+
+    struct State {
+        compositor: Option<WlCompositor>,
+        shm: Option<WlShm>,
+        screencopy_manager: Option<ZwlrScreencopyManagerV1>,
+        outputs: Vec<WlOutput>,
+    }
+
+    impl Dispatch<wayland_client::protocol::wl_registry::WlRegistry, ()> for State {
+        fn event(
+            &mut self,
+            registry: &wayland_client::protocol::wl_registry::WlRegistry,
+            event: wayland_client::protocol::wl_registry::Event,
+            _: &(),
+            _: &Connection,
+            qh: &QueueHandle<Self>,
+        ) {
+            if let wayland_client::protocol::wl_registry::Event::Global {
+                name,
+                interface,
+                version,
+            } = event
+            {
+                match interface.as_str() {
+                    "wl_compositor" => {
+                        self.compositor =
+                            Some(registry.bind::<WlCompositor, _, _>(name, version, qh, ()));
+                    }
+                    "wl_shm" => {
+                        self.shm = Some(registry.bind::<WlShm, _, _>(name, version, qh, ()));
+                    }
+                    "zwlr_screencopy_manager_v1" => {
+                        self.screencopy_manager = Some(
+                            registry.bind::<ZwlrScreencopyManagerV1, _, _>(name, version, qh, ()),
+                        );
+                    }
+                    "wl_output" => {
+                        self.outputs
+                            .push(registry.bind::<WlOutput, _, _>(name, version, qh, ()));
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    let mut state = State {
+        compositor: None,
+        shm: None,
+        screencopy_manager: None,
+        outputs: vec![],
+    };
+
+    event_queue
+        .roundtrip(&mut state)
+        .context("Failed to initialize Wayland globals")?;
+
+    let screencopy_manager = state
+        .screencopy_manager
+        .context("wlr-screencopy-unstable-v1 not available")?;
+    let output = state.outputs.get(0).context("No outputs found")?;
+
+    let frame = screencopy_manager.capture_output_region(0, output, x, y, width, height, &qh, ());
+
+    struct FrameState {
+        buffer: Option<Vec<u8>>,
+        width: u32,
+        height: u32,
+        format: Option<wayland_client::protocol::wl_shm::Format>,
+    }
+
+    impl Dispatch<ZwlrScreencopyFrameV1, ()> for FrameState {
+        fn event(
+            &mut self,
+            frame: &ZwlrScreencopyFrameV1,
+            event: wayland_protocols::unstable::screencopy::v1::client::zwlr_screencopy_frame_v1::Event,
+            _: &(),
+            _: &Connection,
+            _: &QueueHandle<Self>,
+        ) {
+            match event {
+                zwlr_screencopy_frame_v1::Event::Buffer {
+                    format,
+                    width,
+                    height,
+                    stride,
+                } => {
+                    self.width = width;
+                    self.height = height;
+                    self.format = Some(format);
+                    self.buffer = Some(vec![0u8; (stride * height) as usize]);
+                }
+                zwlr_screencopy_frame_v1::Event::Ready { .. } => {
+                    frame.destroy();
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let mut frame_state = FrameState {
+        buffer: None,
+        width: 0,
+        height: 0,
+        format: None,
+    };
+
+    event_queue
+        .roundtrip(&mut frame_state)
+        .context("Failed to capture frame")?;
+
+    let buffer = frame_state
+        .buffer
+        .context("Failed to receive frame buffer")?;
+    let width = frame_state.width;
+    let height = frame_state.height;
+
+    let img: ImageBuffer<Rgba<u8>, _> = ImageBuffer::from_raw(width, height, buffer)
+        .context("Failed to create image from buffer")?;
+    let dynamic_img = DynamicImage::ImageRgba8(img);
+
+    if raw {
+        let mut stdout = std::io::stdout();
+        dynamic_img
+            .write_to(&mut stdout, image::ImageOutputFormat::Png)
+            .context("Failed to write raw image to stdout")?;
+        return Ok(());
+    }
+
+    if !clipboard_only {
+        create_dir_all(save_fullpath.parent().unwrap())
+            .context("Failed to create screenshot directory")?;
+        dynamic_img
+            .save(save_fullpath)
+            .context(format!("Failed to save screenshot to '{}'", save_fullpath.display()))?;
+
+        let wl_copy_status = Command::new("wl-copy")
+            .arg("--type")
+            .arg("image/png")
+            .stdin(std::fs::File::open(save_fullpath).context(format!(
+                "Failed to open screenshot file '{}'",
+                save_fullpath.display()
+            ))?)
+            .status()
+            .context("Failed to run wl-copy")?;
+        if !wl_copy_status.success() {
+            return Err(anyhow::anyhow!("wl-copy failed to copy screenshot"));
+        }
+
+        if let Some(cmd) = command {
+            let cmd_status = Command::new(&cmd[0])
+                .args(&cmd[1..])
+                .arg(save_fullpath)
+                .status()
+                .context(format!("Failed to run command '{}'", cmd[0]))?;
+            if !cmd_status.success() {
+                return Err(anyhow::anyhow!("Command '{}' failed", cmd[0]));
+            }
+        }
+    } else {
+        let mut buffer = Vec::new();
+        dynamic_img
+            .write_to(&mut std::io::Cursor::new(&mut buffer), image::ImageOutputFormat::Png)
+            .context("Failed to encode image to PNG")?;
+
+        let mut wl_copy = Command::new("wl-copy")
+            .arg("--type")
+            .arg("image/png")
+            .stdin(Stdio::piped())
+            .spawn()
+            .context("Failed to start wl-copy")?;
+        wl_copy
+            .stdin
+            .as_mut()
+            .unwrap()
+            .write_all(&buffer)
+            .context("Failed to write to wl-copy stdin")?;
+        let wl_copy_status = wl_copy.wait().context("Failed to wait for wl-copy")?;
+        if !wl_copy_status.success() {
+            return Err(anyhow::anyhow!("wl-copy failed to copy screenshot"));
+        }
+    }
+
+    if !silent {
+        let message = if clipboard_only {
+            "Image copied to the clipboard".to_string()
+        } else {
+            format!(
+                "Image saved in <i>{}</i> and copied to the clipboard.",
+                save_fullpath.display()
+            )
+        };
+        Notification::new()
+            .summary("Screenshot saved")
+            .body(&message)
+            .icon(save_fullpath.to_str().unwrap_or("screenshot"))
+            .timeout(notif_timeout as i32)
+            .appname("Hyprshot-rs")
+            .show()
+            .context("Failed to show notification")?;
+    }
+
+    Ok(())
+}
+
+fn save_geometry(
+    geometry: &str,
+    save_fullpath: &PathBuf,
+    clipboard_only: bool,
+    raw: bool,
+    command: Option<Vec<String>>,
+    silent: bool,
+    notif_timeout: u32,
+    debug: bool,
+) -> Result<()> {
+    #[cfg(feature = "grim")]
+    return save_geometry_with_grim(
+        geometry,
+        save_fullpath,
+        clipboard_only,
+        raw,
+        command,
+        silent,
+        notif_timeout,
+        debug,
+    );
+    #[cfg(feature = "native")]
+    return save_geometry_with_native(
+        geometry,
+        save_fullpath,
+        clipboard_only,
+        raw,
+        command,
+        silent,
+        notif_timeout,
+        debug,
+    );
+    #[cfg(not(any(feature = "grim", feature = "native")))]
+    compile_error!("At least one of 'grim' or 'native' features must be enabled");
 }
 
 fn grab_output(debug: bool) -> Result<String> {
@@ -673,12 +928,19 @@ fn grab_window(debug: bool) -> Result<String> {
         .filter_map(|c| {
             let at = c["at"].as_array()?;
             let size = c["size"].as_array()?;
+            let x = at[0].as_i64()?;
+            let y = at[1].as_i64()?;
+            let width = size[0].as_i64()?;
+            let height = size[1].as_i64()?;
+            if width <= 0 || height <= 0 {
+                return None; // Пропускаем окна с неположительными размерами
+            }
             Some(format!(
                 "{},{} {}x{} {}",
-                at[0].as_i64()?,
-                at[1].as_i64()?,
-                size[0].as_i64()?,
-                size[1].as_i64()?,
+                x,
+                y,
+                width,
+                height,
                 c["title"].as_str().unwrap_or("")
             ))
         })
@@ -690,7 +952,7 @@ fn grab_window(debug: bool) -> Result<String> {
     }
 
     if boxes.is_empty() {
-        return Err(anyhow::anyhow!("No windows found to capture"));
+        return Err(anyhow::anyhow!("No valid windows found to capture"));
     }
 
     let mut slurp = Command::new("slurp")
@@ -709,7 +971,10 @@ fn grab_window(debug: bool) -> Result<String> {
 
     let output = slurp.wait_with_output().context("Failed to run slurp")?;
     if !output.status.success() {
-        return Err(anyhow::anyhow!("slurp failed to select window"));
+        return Err(anyhow::anyhow!(
+            "slurp failed to select window: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
     }
 
     let geometry = String::from_utf8(output.stdout)
@@ -722,6 +987,12 @@ fn grab_window(debug: bool) -> Result<String> {
     if geometry.is_empty() {
         return Err(anyhow::anyhow!("slurp returned empty geometry"));
     }
+
+    let parts: Vec<&str> = geometry.split(' ').collect();
+    if parts.len() != 2 || parts[0].split(',').count() != 2 || parts[1].split('x').count() != 2 {
+        return Err(anyhow::anyhow!("Invalid geometry format: '{}'", geometry));
+    }
+
     Ok(geometry)
 }
 

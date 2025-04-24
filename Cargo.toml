@@ -3,7 +3,7 @@ name = "hyprshot-rs"
 version = "0.1.0"
 edition = "2024"
 description = "A utility to easily take screenshots in Hyprland using your mouse"
-license = "MIT OR Apache-2.0"
+license = "GNU GENERAL PUBLIC LICENSE"
 repository = "https://github.com/vremyavnikuda/hyprshot-rs"
 homepage = "https://github.com/vremyavnikuda/hyprshot-rs"
 keywords = ["hyprland", "screenshot", "wayland", "cli"]
@@ -18,5 +18,20 @@ anyhow = "1.0"
 dirs = "5.0"
 chrono = "0.4"
 
-[package.metadata]
-bin = [{ name = "hyprshot-rs", path = "src/main.rs" }]
+[dependencies.wayland-client]
+version = "0.31"
+optional = true
+
+[dependencies.wayland-protocols]
+version = "0.32"
+optional = true
+features = ["unstable"]
+
+[dependencies.image]
+version = "0.25"
+optional = true
+
+[features]
+default = ["grim"]
+grim = []
+native = ["wayland-client", "wayland-protocols", "image"]
