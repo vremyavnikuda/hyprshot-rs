@@ -29,6 +29,10 @@ sudo pacman -S grim slurp wl-clipboard hyprland hyprpicker
 ```
 ___
 ## Usage
+Make it available regardless of the shell
+```bash
+sudo ln -s ~/.local/share/cargo/bin/hyprshot-rs /usr/local/bin/
+```
 
 ```bash
 hyprshot-rs [options ..] [-m [mode] ..] -- [command]
@@ -60,6 +64,7 @@ hyprshot-rs -m active -m output
 hyprshot-rs -m region -r > output.png
 ```
 redirects the output to output.png in your current working directory. So if you're currently in ~/repository when running this command, that's where the screenshot will be saved, not in the default ~/Pictures directory.
+
 
 Run `hyprshot-rs --help` or `hyprshot-rs -h`for more options.
 
