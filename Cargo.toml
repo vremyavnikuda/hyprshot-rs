@@ -1,6 +1,6 @@
 [package]
 name = "hyprshot-rs"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "A utility to easily take screenshots in Hyprland using your mouse"
 license = "GPL-3.0"
