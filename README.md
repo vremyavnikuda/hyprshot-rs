@@ -5,9 +5,15 @@ ___
 A utility to easily take screenshots in Hyprland using your mouse.
 
 ## Features
-- Capture screenshots of windows, regions, or monitors.
+- Capture screenshots.
+    - Capture the entire monitor (output)
+    - Capture the active monitor (active)
+    - Capturing the selected (region)
+    - Capturing the selected (window)
+    - Capture of the (active window)
 - Save screenshots to a specified folder or copy to the clipboard.
-- Support for delayed captures, screen freezing, and custom commands.
+     - Screenshots are saved only in PNG. The choice of other formats (JPEG, WEBP) or compression settings is not supported.
+- Additional options and custom commands [cli](doc/CLI.md).
 
 ## Installation
 
