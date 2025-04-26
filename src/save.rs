@@ -133,15 +133,15 @@ pub fn save_geometry_with_native(
     notif_timeout: u32,
     debug: bool,
 ) -> Result<()> {
+    use image::{DynamicImage, ImageBuffer, Rgba};
     use wayland_client::{
-        protocol::{wl_compositor::WlCompositor, wl_output::WlOutput, wl_shm::WlShm},
         Connection, Dispatch, QueueHandle,
+        protocol::{wl_compositor::WlCompositor, wl_output::WlOutput, wl_shm::WlShm},
     };
     use wayland_protocols::unstable::screencopy::v1::client::{
         zwlr_screencopy_frame_v1::ZwlrScreencopyFrameV1,
         zwlr_screencopy_manager_v1::ZwlrScreencopyManagerV1,
     };
-    use image::{DynamicImage, ImageBuffer, Rgba};
 
     if debug {
         eprintln!("Saving geometry with native Wayland: {}", geometry);
@@ -298,9 +298,10 @@ pub fn save_geometry_with_native(
     if !clipboard_only {
         create_dir_all(save_fullpath.parent().unwrap())
             .context("Failed to create screenshot directory")?;
-        dynamic_img
-            .save(save_fullpath)
-            .context(format!("Failed to save screenshot to '{}'", save_fullpath.display()))?;
+        dynamic_img.save(save_fullpath).context(format!(
+            "Failed to save screenshot to '{}'",
+            save_fullpath.display()
+        ))?;
 
         let wl_copy_status = Command::new("wl-copy")
             .arg("--type")
@@ -328,7 +329,10 @@ pub fn save_geometry_with_native(
     } else {
         let mut buffer = Vec::new();
         dynamic_img
-            .write_to(&mut std::io::Cursor::new(&mut buffer), image::ImageOutputFormat::Png)
+            .write_to(
+                &mut std::io::Cursor::new(&mut buffer),
+                image::ImageOutputFormat::Png,
+            )
             .context("Failed to encode image to PNG")?;
 
         let mut wl_copy = Command::new("wl-copy")

@@ -1,6 +1,9 @@
 use anyhow::{Context, Result};
 use serde_json::Value;
-use std::{io::Write, process::{Command, Stdio}};
+use std::{
+    io::Write,
+    process::{Command, Stdio},
+};
 
 pub fn grab_output(debug: bool) -> Result<String> {
     let output = Command::new("slurp")
@@ -48,7 +51,10 @@ pub fn grab_active_output(debug: bool) -> Result<String> {
 
     let current_monitor = monitors
         .as_array()
-        .and_then(|arr| arr.iter().find(|m| m["activeWorkspace"]["id"] == active_workspace["id"]))
+        .and_then(|arr| {
+            arr.iter()
+                .find(|m| m["activeWorkspace"]["id"] == active_workspace["id"])
+        })
         .context("No matching monitor found")?;
 
     if debug {

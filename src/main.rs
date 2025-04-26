@@ -1,22 +1,29 @@
 use anyhow::{Context, Result};
+use chrono::Local;
 use clap::{Parser, ValueEnum};
 use std::path::PathBuf;
 use std::process::Command;
 use std::thread::sleep;
 use std::time::Duration;
-use chrono::Local;
 
 mod capture;
 mod save;
 mod utils;
 
 #[derive(Parser)]
-#[command(name = "hyprshot-rs", about = "Utility to easily take screenshots in Hyprland")]
+#[command(
+    name = "hyprshot-rs",
+    about = "Utility to easily take screenshots in Hyprland"
+)]
 struct Args {
     #[arg(short, long, help = "Show help message")]
     help: bool,
 
-    #[arg(short = 'm', long, help = "Mode: output, window, region, active, or OUTPUT_NAME")]
+    #[arg(
+        short = 'm',
+        long,
+        help = "Mode: output, window, region, active, or OUTPUT_NAME"
+    )]
     mode: Vec<Mode>,
 
     #[arg(short, long, help = "Directory to save screenshot")]
@@ -40,7 +47,12 @@ struct Args {
     #[arg(short, long, help = "Output raw image data to stdout")]
     raw: bool,
 
-    #[arg(short, long, default_value = "5000", help = "Notification timeout (ms)")]
+    #[arg(
+        short,
+        long,
+        default_value = "5000",
+        help = "Notification timeout (ms)"
+    )]
     notif_timeout: u32,
 
     #[arg(long, help = "Copy to clipboard and don't save to disk")]
@@ -94,7 +106,11 @@ fn main() -> Result<()> {
     let notif_timeout = args.notif_timeout;
     let freeze = args.freeze;
     let delay = args.delay.unwrap_or(0);
-    let command = if args.command.is_empty() { None } else { Some(args.command) };
+    let command = if args.command.is_empty() {
+        None
+    } else {
+        Some(args.command)
+    };
 
     let mut option: Option<Mode> = None;
     let mut current = false;
@@ -114,11 +130,13 @@ fn main() -> Result<()> {
 
     let option = option.context("A mode is required (output, region, window)")?;
 
-    let save_dir = args.output_folder.unwrap_or_else(|| {
-        dirs::picture_dir().unwrap_or_else(|| PathBuf::from("~"))
-    });
+    let save_dir = args
+        .output_folder
+        .unwrap_or_else(|| dirs::picture_dir().unwrap_or_else(|| PathBuf::from("~")));
     let filename = args.filename.unwrap_or_else(|| {
-        Local::now().format("%Y-%m-%d-%H%M%S_hyprshot.png").to_string()
+        Local::now()
+            .format("%Y-%m-%d-%H%M%S_hyprshot.png")
+            .to_string()
     });
     let save_fullpath = save_dir.join(&filename);
 

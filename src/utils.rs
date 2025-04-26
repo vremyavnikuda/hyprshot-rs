@@ -111,7 +111,10 @@ pub fn trim(geometry: &str, debug: bool) -> Result<String> {
         ));
     }
 
-    let cropped = format!("{0},{1} {2}x{3}", cropped_x, cropped_y, cropped_width, cropped_height);
+    let cropped = format!(
+        "{0},{1} {2}x{3}",
+        cropped_x, cropped_y, cropped_width, cropped_height
+    );
     if debug {
         eprintln!("Cropped geometry: {}", cropped);
     }
