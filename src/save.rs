@@ -151,12 +151,6 @@ pub fn save_geometry_with_native(
     if parts.len() != 2 {
         return Err(anyhow::anyhow!("Invalid geometry format: '{}'", geometry));
     }
-    let xy: Vec<&str> = parts[0].split(',').collect();
-    let wh: Vec<&str> = parts[1].split('x').collect();
-    let x: i32 = xy[0].parse().context("Invalid x coordinate")?;
-    let y: i32 = xy[1].parse().context("Invalid y coordinate")?;
-    let width: i32 = wh[0].parse().context("Invalid width")?;
-    let height: i32 = wh[1].parse().context("Invalid height")?;
 
     let conn = Connection::connect_to_env().context("Failed to connect to Wayland")?;
     let mut event_queue = conn.new_event_queue();
@@ -168,8 +162,6 @@ pub fn save_geometry_with_native(
         .context("Failed to get Wayland registry")?;
 
     struct State {
-        compositor: Option<WlCompositor>,
-        shm: Option<WlShm>,
         screencopy_manager: Option<ZwlrScreencopyManagerV1>,
         outputs: Vec<WlOutput>,
     }
@@ -190,13 +182,6 @@ pub fn save_geometry_with_native(
             } = event
             {
                 match interface.as_str() {
-                    "wl_compositor" => {
-                        self.compositor =
-                            Some(registry.bind::<WlCompositor, _, _>(name, version, qh, ()));
-                    }
-                    "wl_shm" => {
-                        self.shm = Some(registry.bind::<WlShm, _, _>(name, version, qh, ()));
-                    }
                     "zwlr_screencopy_manager_v1" => {
                         self.screencopy_manager = Some(
                             registry.bind::<ZwlrScreencopyManagerV1, _, _>(name, version, qh, ()),
@@ -213,8 +198,6 @@ pub fn save_geometry_with_native(
     }
 
     let mut state = State {
-        compositor: None,
-        shm: None,
         screencopy_manager: None,
         outputs: vec![],
     };
@@ -373,40 +356,4 @@ pub fn save_geometry_with_native(
     }
 
     Ok(())
-}
-
-pub fn save_geometry(
-    geometry: &str,
-    save_fullpath: &PathBuf,
-    clipboard_only: bool,
-    raw: bool,
-    command: Option<Vec<String>>,
-    silent: bool,
-    notif_timeout: u32,
-    debug: bool,
-) -> Result<()> {
-    #[cfg(feature = "grim")]
-    return save_geometry_with_grim(
-        geometry,
-        save_fullpath,
-        clipboard_only,
-        raw,
-        command,
-        silent,
-        notif_timeout,
-        debug,
-    );
-    #[cfg(feature = "native")]
-    return save_geometry_with_native(
-        geometry,
-        save_fullpath,
-        clipboard_only,
-        raw,
-        command,
-        silent,
-        notif_timeout,
-        debug,
-    );
-    #[cfg(not(any(feature = "grim", feature = "native")))]
-    compile_error!("At least one of 'grim' or 'native' features must be enabled");
 }

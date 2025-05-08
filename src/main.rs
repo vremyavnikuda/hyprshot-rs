@@ -94,11 +94,6 @@ enum Mode {
 fn main() -> Result<()> {
     let args = Args::parse();
 
-    if args.help || args.mode.is_empty() {
-        print_help();
-        return Ok(());
-    }
-
     let debug = args.debug;
     let clipboard_only = args.clipboard_only;
     let silent = args.silent;
