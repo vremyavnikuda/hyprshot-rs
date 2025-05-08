@@ -21,4 +21,23 @@ impl Environment {
         }
         Ok(self.desktop.to_lowercase())
     }
+}
+
+pub fn detect_desktop_environment() -> Result<String> {
+    let output = Command::new("echo")
+        .arg("$XDG_CURRENT_DESKTOP")
+        .output()
+        .context("Failed to detect desktop environment")?;
+
+    let desktop = String::from_utf8_lossy(&output.stdout).trim().to_lowercase();
+    
+    if desktop.contains("hyprland") {
+        Ok("Hyprland".to_string())
+    } else if desktop.contains("kde") {
+        Ok("KDE".to_string())
+    } else if desktop.contains("gnome") {
+        Ok("GNOME".to_string())
+    } else {
+        Ok("Unknown".to_string())
+    }
 } 

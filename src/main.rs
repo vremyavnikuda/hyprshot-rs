@@ -7,8 +7,11 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::thread::sleep;
 use std::time::Duration;
-use log::LevelFilter;
+use log::{info, debug};
+use serde_json;
+use tempfile;
 
+mod args;
 mod wayland;
 mod grim;
 mod environment;
@@ -17,108 +20,199 @@ mod capture;
 mod save;
 mod utils;
 
-#[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
-struct Args {
-    /// Mode to use (output, region, window)
-    #[arg(short, long)]
-    mode: String,
+use args::{Args, Mode};
+use save::save_geometry;
 
-    /// Save directory
-    #[arg(short, long)]
-    save_dir: Option<PathBuf>,
-
-    /// Save filename
-    #[arg(short, long)]
-    filename: Option<String>,
-
-    /// Only copy to clipboard
-    #[arg(short, long)]
-    clipboard_only: bool,
-
-    /// Raw output
-    #[arg(short, long)]
-    raw: bool,
-
-    /// Command to run after taking screenshot
-    #[arg(short, long)]
-    command: Option<Vec<String>>,
-
-    /// Silent mode (no notifications)
-    #[arg(short, long)]
-    silent: bool,
-
-    /// Notification timeout in milliseconds
-    #[arg(short, long, default_value_t = 5000)]
-    notif_timeout: u32,
-
-    /// Debug mode
-    #[arg(short, long)]
-    debug: bool,
+fn generate_filename() -> PathBuf {
+    let pictures_dir = dirs::picture_dir().unwrap_or_else(|| PathBuf::from("."));
+    let timestamp = Local::now().format("%Y-%m-%d-%H%M%S").to_string();
+    pictures_dir.join(format!("{}_hyprshot.png", timestamp))
 }
 
-#[derive(Clone, Debug, ValueEnum)]
-enum Mode {
-    Output,
-    Window,
-    Region,
-    Active,
-    #[clap(skip)]
-    OutputName(String),
+fn select_region() -> Result<String> {
+    let output = std::process::Command::new("slurp")
+        .output()
+        .map_err(|e| anyhow::anyhow!("Failed to run slurp: {}", e))?;
+
+    if !output.status.success() {
+        return Ok(String::new());
+    }
+
+    let geometry = String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .to_string();
+
+    if cfg!(debug_assertions) {
+        println!("Region geometry: {}", geometry);
+    }
+
+    Ok(geometry)
+}
+
+fn select_window() -> Result<String> {
+    // Получаем список окон через hyprctl
+    let output = std::process::Command::new("hyprctl")
+        .args(["clients", "-j"])
+        .output()
+        .map_err(|e| anyhow::anyhow!("Failed to run hyprctl: {}", e))?;
+
+    if !output.status.success() {
+        return Err(anyhow::anyhow!("hyprctl failed to get window list"));
+    }
+
+    // Парсим JSON с информацией об окнах
+    let windows: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout)
+        .map_err(|e| anyhow::anyhow!("Failed to parse window list: {}", e))?;
+
+    // Создаем список окон для выбора
+    let mut window_list = String::new();
+    for (i, window) in windows.iter().enumerate() {
+        let title = window["title"].as_str().unwrap_or("Untitled");
+        let class = window["class"].as_str().unwrap_or("Unknown");
+        let address = window["address"].as_str().unwrap_or("0x0");
+        window_list.push_str(&format!("{}. {} ({}) - {}\n", i + 1, title, class, address));
+    }
+
+    // Сохраняем список во временный файл
+    let temp_file = tempfile::NamedTempFile::new()
+        .map_err(|e| anyhow::anyhow!("Failed to create temp file: {}", e))?;
+    std::fs::write(&temp_file, window_list)
+        .map_err(|e| anyhow::anyhow!("Failed to write window list: {}", e))?;
+
+    // Запускаем rofi для выбора окна
+    let rofi_output = std::process::Command::new("rofi")
+        .args([
+            "-dmenu",
+            "-i",
+            "-p", "Select window",
+            "-format", "i",
+            "-theme", "default",
+        ])
+        .stdin(std::fs::File::open(&temp_file)?)
+        .output()
+        .map_err(|e| anyhow::anyhow!("Failed to run rofi: {}", e))?;
+
+    if !rofi_output.status.success() {
+        return Ok(String::new());
+    }
+
+    // Получаем индекс выбранного окна
+    let selected_index = String::from_utf8_lossy(&rofi_output.stdout)
+        .trim()
+        .parse::<usize>()
+        .map_err(|e| anyhow::anyhow!("Failed to parse selected index: {}", e))?;
+
+    if selected_index == 0 || selected_index > windows.len() {
+        return Ok(String::new());
+    }
+
+    // Получаем геометрию выбранного окна
+    let window = &windows[selected_index - 1];
+    let x = window["at"][0].as_i64().unwrap_or(0) as i32;
+    let y = window["at"][1].as_i64().unwrap_or(0) as i32;
+    let width = window["size"][0].as_i64().unwrap_or(0) as u32;
+    let height = window["size"][1].as_i64().unwrap_or(0) as u32;
+
+    Ok(format!("{},{} {}x{}", x, y, width, height))
+}
+
+fn select_screen() -> Result<String> {
+    // Получаем список мониторов через hyprctl
+    let output = std::process::Command::new("hyprctl")
+        .args(["monitors", "-j"])
+        .output()
+        .map_err(|e| anyhow::anyhow!("Failed to run hyprctl: {}", e))?;
+
+    if !output.status.success() {
+        return Err(anyhow::anyhow!("hyprctl failed to get monitor list"));
+    }
+
+    // Парсим JSON с информацией о мониторах
+    let monitors: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout)
+        .map_err(|e| anyhow::anyhow!("Failed to parse monitor list: {}", e))?;
+
+    // Создаем список мониторов для выбора
+    let mut monitor_list = String::new();
+    for (i, monitor) in monitors.iter().enumerate() {
+        let name = monitor["name"].as_str().unwrap_or("Unknown");
+        let width = monitor["width"].as_i64().unwrap_or(0);
+        let height = monitor["height"].as_i64().unwrap_or(0);
+        monitor_list.push_str(&format!("{}. {} ({}x{})\n", i + 1, name, width, height));
+    }
+
+    // Сохраняем список во временный файл
+    let temp_file = tempfile::NamedTempFile::new()
+        .map_err(|e| anyhow::anyhow!("Failed to create temp file: {}", e))?;
+    std::fs::write(&temp_file, monitor_list)
+        .map_err(|e| anyhow::anyhow!("Failed to write monitor list: {}", e))?;
+
+    // Запускаем rofi для выбора монитора
+    let rofi_output = std::process::Command::new("rofi")
+        .args([
+            "-dmenu",
+            "-i",
+            "-p", "Select monitor",
+            "-format", "i",
+            "-theme", "default",
+        ])
+        .stdin(std::fs::File::open(&temp_file)?)
+        .output()
+        .map_err(|e| anyhow::anyhow!("Failed to run rofi: {}", e))?;
+
+    if !rofi_output.status.success() {
+        return Ok(String::new());
+    }
+
+    // Получаем индекс выбранного монитора
+    let selected_index = String::from_utf8_lossy(&rofi_output.stdout)
+        .trim()
+        .parse::<usize>()
+        .map_err(|e| anyhow::anyhow!("Failed to parse selected index: {}", e))?;
+
+    if selected_index == 0 || selected_index > monitors.len() {
+        return Ok(String::new());
+    }
+
+    // Получаем геометрию выбранного монитора
+    let monitor = &monitors[selected_index - 1];
+    let x = monitor["x"].as_i64().unwrap_or(0) as i32;
+    let y = monitor["y"].as_i64().unwrap_or(0) as i32;
+    let width = monitor["width"].as_i64().unwrap_or(0) as u32;
+    let height = monitor["height"].as_i64().unwrap_or(0) as u32;
+
+    Ok(format!("{},{} {}x{}", x, y, width, height))
 }
 
 fn main() -> Result<()> {
-    // Initialize logger
-    if std::env::var("RUST_LOG").is_err() {
-        std::env::set_var("RUST_LOG", "debug");
-    }
-    simple_logger::init_with_level(log::Level::Debug)?;
-
     let args = Args::parse();
+    
+    if args.debug {
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("debug"))
+            .init();
+    } else {
+        env_logger::init();
+    }
 
-    let save_dir = args.save_dir.unwrap_or_else(|| {
-        dirs::picture_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-    });
+    info!("Starting hyprshot-rs");
+    debug!("Arguments: {:?}", args);
 
-    let filename = args.filename.unwrap_or_else(|| {
-        Local::now()
-            .format("%Y-%m-%d-%H%M%S_hyprshot.png")
-            .to_string()
-    });
-
-    let save_fullpath = save_dir.join(filename);
+    // Генерируем путь для сохранения файла, если он не указан
+    let save_path = if args.clipboard_only {
+        PathBuf::new()
+    } else {
+        args.output_path.unwrap_or_else(generate_filename)
+    };
 
     if args.debug {
-        println!("Saving in: {}", save_fullpath.display());
+        info!("Saving to: {}", save_path.display());
     }
 
-    match args.mode.as_str() {
-        "output" => {
-            // TODO: Implement output mode
-            unimplemented!("Output mode not implemented yet");
-        }
-        "region" => {
-            // Get region geometry from slurp
-            let output = std::process::Command::new("slurp")
-                .output()
-                .map_err(|e| anyhow::anyhow!("Failed to run slurp: {}", e))?;
-
-            if !output.status.success() {
-                return Ok(());
-            }
-
-            let geometry = String::from_utf8_lossy(&output.stdout)
-                .trim()
-                .to_string();
-
-            if args.debug {
-                println!("Region geometry: {}", geometry);
-            }
-
-            save::save_geometry(
+    match args.mode {
+        Mode::Region => {
+            let geometry = select_region()?;
+            save_geometry(
                 &geometry,
-                &save_fullpath,
+                &save_path,
                 args.clipboard_only,
                 args.raw,
                 args.command,
@@ -127,12 +221,31 @@ fn main() -> Result<()> {
                 args.debug,
             )?;
         }
-        "window" => {
-            // TODO: Implement window mode
-            unimplemented!("Window mode not implemented yet");
+        Mode::Window => {
+            let geometry = select_window()?;
+            save_geometry(
+                &geometry,
+                &save_path,
+                args.clipboard_only,
+                args.raw,
+                args.command,
+                args.silent,
+                args.notif_timeout,
+                args.debug,
+            )?;
         }
-        _ => {
-            return Err(anyhow::anyhow!("Invalid mode: {}", args.mode));
+        Mode::Screen => {
+            let geometry = select_screen()?;
+            save_geometry(
+                &geometry,
+                &save_path,
+                args.clipboard_only,
+                args.raw,
+                args.command,
+                args.silent,
+                args.notif_timeout,
+                args.debug,
+            )?;
         }
     }
 

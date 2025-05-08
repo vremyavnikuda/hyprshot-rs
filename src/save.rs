@@ -21,8 +21,8 @@ use crate::wayland::WaylandScreenshot;
 use crate::environment::Environment;
 use crate::desktop::{save_geometry_with_kde, save_geometry_with_gnome};
 
-// #[cfg(feature = "grim")]
-// use crate::grim;
+#[cfg(feature = "grim")]
+use crate::grim;
 
 pub fn save_geometry(
     geometry: &str,
@@ -34,41 +34,84 @@ pub fn save_geometry(
     notif_timeout: u32,
     debug: bool,
 ) -> Result<()> {
-    let env = Environment::new(debug)?;
-    let desktop = env.detect_desktop_environment()?;
+    info!("Saving geometry: {}", geometry);
+    let desktop_env = crate::environment::detect_desktop_environment()?;
+    info!("Detected desktop environment: {}", desktop_env);
 
-    match desktop.as_str() {
-        "kde" => save_geometry_with_kde(
-            geometry,
-            save_fullpath,
-            clipboard_only,
-            raw,
-            command,
-            silent,
-            notif_timeout,
-            debug,
-        ),
-        "gnome" => save_geometry_with_gnome(
-            geometry,
-            save_fullpath,
-            clipboard_only,
-            raw,
-            command,
-            silent,
-            notif_timeout,
-            debug,
-        ),
-        _ => save_geometry_with_native(
-            geometry,
-            save_fullpath,
-            clipboard_only,
-            raw,
-            command,
-            silent,
-            notif_timeout,
-            debug,
-        ),
+    match desktop_env.as_str() {
+        "Hyprland" => {
+            #[cfg(feature = "grim")]
+            {
+                info!("Saving geometry with grim: {}", geometry);
+                grim::save_geometry_with_grim(
+                    geometry,
+                    save_fullpath,
+                    clipboard_only,
+                    raw,
+                    command,
+                    silent,
+                    notif_timeout,
+                    debug,
+                )?;
+                return Ok(());
+            }
+            #[cfg(not(feature = "grim"))]
+            {
+                info!("Saving geometry with native Wayland implementation: {}", geometry);
+                save_geometry_with_native(
+                    geometry,
+                    save_fullpath,
+                    clipboard_only,
+                    raw,
+                    command,
+                    silent,
+                    notif_timeout,
+                    debug,
+                )?;
+            }
+        }
+        "KDE" => {
+            info!("Saving geometry with KDE: {}", geometry);
+            save_geometry_with_kde(
+                geometry,
+                save_fullpath,
+                clipboard_only,
+                raw,
+                command,
+                silent,
+                notif_timeout,
+                debug,
+            )?;
+        }
+        "GNOME" => {
+            info!("Saving geometry with GNOME: {}", geometry);
+            save_geometry_with_gnome(
+                geometry,
+                save_fullpath,
+                clipboard_only,
+                raw,
+                command,
+                silent,
+                notif_timeout,
+                debug,
+            )?;
+        }
+        _ => {
+            info!("Saving geometry with native Wayland implementation: {}", geometry);
+            save_geometry_with_native(
+                geometry,
+                save_fullpath,
+                clipboard_only,
+                raw,
+                command,
+                silent,
+                notif_timeout,
+                debug,
+            )?;
+        }
     }
+
+    Ok(())
 }
 
 pub fn save_geometry_with_native(

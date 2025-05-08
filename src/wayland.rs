@@ -12,7 +12,7 @@ use wayland_protocols_wlr::screencopy::v1::client::{
 };
 use memmap2::MmapMut;
 use std::io::Cursor;
-use png::{Encoder, ColorType, BitDepth};
+use png::{Encoder, ColorType, BitDepth, FilterType, Compression};
 
 pub struct WaylandScreenshot {
     _conn: Connection,
@@ -122,66 +122,73 @@ impl WaylandScreenshot {
         let pool = shm.create_pool(unsafe { BorrowedFd::borrow_raw(file.as_raw_fd()) }, size, &self.event_queue.handle(), ());
         debug!("Created shared memory pool");
 
-        let formats = [
-            wl_shm::Format::Xrgb8888,
-            wl_shm::Format::Argb8888,
-            wl_shm::Format::Xbgr8888,
-            wl_shm::Format::Abgr8888,
-        ];
+        // Используем XRGB8888 для лучшей совместимости
+        let format = wl_shm::Format::Xrgb8888;
+        if self.state.debug {
+            info!("Using format: {:?}", format);
+        }
+        
+        let buffer = pool.create_buffer(
+            0,
+            width as i32,
+            height as i32,
+            stride as i32,
+            format,
+            &self.event_queue.handle(),
+            (),
+        );
+        debug!("Created buffer with format {:?}", format);
 
-        let mut _buffer = None;
-        for format in formats.iter() {
-            if self.state.debug {
-                info!("Trying format: {:?}", format);
+        let frame = self.state.screencopy_manager.as_ref().unwrap()
+            .capture_output_region(0, &self.state.outputs[0], x, y, width as i32, height as i32, &self.event_queue.handle(), ());
+        debug!("Requested frame capture");
+        frame.copy(&buffer);
+
+        // Wait for buffer data and frame completion
+        let mut timeout = 0;
+        while !self.state.frame_state.done && !self.state.frame_state.failed && !self.state.frame_state.buffer_done {
+            if self.state.debug && timeout % 10 == 0 {
+                info!("Waiting for frame capture... (attempt {})", timeout + 1);
             }
-            
-            _buffer = Some(pool.create_buffer(
-                0,
-                width as i32,
-                height as i32,
-                stride as i32,
-                *format,
-                &self.event_queue.handle(),
-                (),
-            ));
-            debug!("Created buffer with format {:?}", format);
-
-            let frame = self.state.screencopy_manager.as_ref().unwrap()
-                .capture_output_region(0, &self.state.outputs[0], x, y, width as i32, height as i32, &self.event_queue.handle(), ());
-            debug!("Requested frame capture");
-            frame.copy(_buffer.as_ref().unwrap());
-
-            // Wait for buffer data and frame completion
-            let mut timeout = 0;
-            while !self.state.frame_state.done && !self.state.frame_state.failed && !self.state.frame_state.buffer_done {
-                if self.state.debug && timeout % 10 == 0 {
-                    info!("Waiting for frame capture... (attempt {})", timeout + 1);
-                }
-                self.event_queue.blocking_dispatch(&mut self.state)?;
-                timeout += 1;
-                if timeout > 50 { // 5 seconds timeout
-                    debug!("Frame capture timeout");
-                    break;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(100));
-            }
-
-            if !self.state.frame_state.failed {
-                debug!("Frame capture successful");
+            self.event_queue.blocking_dispatch(&mut self.state)?;
+            timeout += 1;
+            if timeout > 50 { // 5 seconds timeout
+                debug!("Frame capture timeout");
                 break;
             }
-
-            if self.state.debug {
-                info!("Format {:?} failed, trying next format", format);
-            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
         }
 
         if self.state.frame_state.failed {
-            return Err(anyhow::anyhow!("Frame capture failed - no supported buffer format found"));
+            return Err(anyhow::anyhow!("Frame capture failed"));
         }
 
         debug!("Frame capture complete, encoding as PNG");
-        let png_data = self.encode_as_png(&mmap, width, height)?;
+        
+        // Создаем PNG с сохранением точной цветопередачи
+        let mut png_data = Vec::new();
+        {
+            let mut encoder = Encoder::new(Cursor::new(&mut png_data), width, height);
+            encoder.set_color(ColorType::Rgb);
+            encoder.set_depth(BitDepth::Eight);
+            
+            let mut writer = encoder.write_header()
+                .context("Failed to write PNG header")?;
+
+            // Преобразуем XRGB в RGB
+            let mut rgb_data = Vec::with_capacity((width * height * 3) as usize);
+            for chunk in mmap.chunks(4) {
+                if chunk.len() >= 4 {
+                    rgb_data.push(chunk[2]); // R
+                    rgb_data.push(chunk[1]); // G
+                    rgb_data.push(chunk[0]); // B
+                }
+            }
+                
+            writer.write_image_data(&rgb_data)
+                .context("Failed to write PNG data")?;
+        }
+            
         debug!("PNG encoding complete, size: {} bytes", png_data.len());
         Ok(png_data)
     }
