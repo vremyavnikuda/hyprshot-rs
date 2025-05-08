@@ -1,7 +1,7 @@
 [package]
 name = "hyprshot-rs"
 version = "0.1.1"
-edition = "2024"
+edition = "2021"
 description = "A utility to easily take screenshots in Hyprland using your mouse"
 license = "GPL-3.0"
 repository = "https://github.com/vremyavnikuda/hyprshot-rs"
@@ -11,27 +11,25 @@ categories = ["command-line-utilities", "graphics"]
 readme = "README.md"
 
 [dependencies]
-clap = { version = "4.5", features = ["derive"] }
-serde_json = "1.0"
-notify-rust = "4.11"
 anyhow = "1.0"
+clap = { version = "4.4", features = ["derive"] }
 dirs = "5.0"
+log = "0.4"
+env_logger = "0.10"
+simple_logger = "4.3"
+notify-rust = "4.9"
+png = "0.17.10"
+serde_json = "1.0.107"
+tempfile = "3.8"
+wayland-client = "0.31"
+wayland-protocols = { version = "0.31.0", features = ["client", "server"] }
+wayland-protocols-wlr = { version = "0.2.0", features = ["client"] }
+wayland-protocols-hyprland = { version = "1.1.0", features = ["client"] }
 chrono = "0.4"
-
-[dependencies.wayland-client]
-version = "0.31"
-optional = true
-
-[dependencies.wayland-protocols]
-version = "0.32"
-optional = true
-features = ["unstable"]
-
-[dependencies.image]
-version = "0.25"
-optional = true
+memmap2 = "0.9"
 
 [features]
-default = ["grim"]
+default = ["native"]
+native = []
 grim = []
-native = ["wayland-client", "wayland-protocols", "image"]
+

@@ -1,11 +1,30 @@
 use anyhow::{Context, Result};
+use log::info;
 use notify_rust::Notification;
-use std::fs::create_dir_all;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::fs::create_dir_all;
+use wayland_client::{
+    protocol::{wl_registry, wl_shm, wl_output, wl_buffer, wl_shm_pool},
+    Connection, Dispatch, QueueHandle,
+    globals::{GlobalListContents, registry_queue_init},
+};
+use wayland_protocols_wlr::screencopy::v1::client::{
+    zwlr_screencopy_frame_v1,
+    zwlr_screencopy_manager_v1::ZwlrScreencopyManagerV1,
+};
+use std::os::unix::io::AsRawFd;
+use memmap2::MmapMut;
+use std::io::Write;
 
-#[cfg(feature = "grim")]
-pub fn save_geometry_with_grim(
+use crate::wayland::WaylandScreenshot;
+use crate::environment::Environment;
+use crate::desktop::{save_geometry_with_kde, save_geometry_with_gnome};
+
+// #[cfg(feature = "grim")]
+// use crate::grim;
+
+pub fn save_geometry(
     geometry: &str,
     save_fullpath: &PathBuf,
     clipboard_only: bool,
@@ -15,91 +34,96 @@ pub fn save_geometry_with_grim(
     notif_timeout: u32,
     debug: bool,
 ) -> Result<()> {
-    use std::io::Write;
+    let env = Environment::new(debug)?;
+    let desktop = env.detect_desktop_environment()?;
 
+    match desktop.as_str() {
+        "kde" => save_geometry_with_kde(
+            geometry,
+            save_fullpath,
+            clipboard_only,
+            raw,
+            command,
+            silent,
+            notif_timeout,
+            debug,
+        ),
+        "gnome" => save_geometry_with_gnome(
+            geometry,
+            save_fullpath,
+            clipboard_only,
+            raw,
+            command,
+            silent,
+            notif_timeout,
+            debug,
+        ),
+        _ => save_geometry_with_native(
+            geometry,
+            save_fullpath,
+            clipboard_only,
+            raw,
+            command,
+            silent,
+            notif_timeout,
+            debug,
+        ),
+    }
+}
+
+pub fn save_geometry_with_native(
+    geometry: &str,
+    save_fullpath: &PathBuf,
+    clipboard_only: bool,
+    raw: bool,
+    command: Option<Vec<String>>,
+    silent: bool,
+    notif_timeout: u32,
+    debug: bool,
+) -> Result<()> {
     if debug {
-        eprintln!("Saving geometry with grim: {}", geometry);
+        info!("Saving geometry with native Wayland implementation: {}", geometry);
     }
 
-    if raw {
-        let output = Command::new("grim")
-            .arg("-g")
-            .arg(geometry)
-            .arg("-")
-            .output()
-            .context("Failed to run grim")?;
-        if !output.status.success() {
-            return Err(anyhow::anyhow!("grim failed to capture screenshot"));
-        }
-        std::io::stdout().write_all(&output.stdout)?;
-        return Ok(());
-    }
+    // Parse geometry
+    let parts: Vec<&str> = geometry.split(' ').collect();
+    let coords: Vec<&str> = parts[0].split(',').collect();
+    let dims: Vec<&str> = parts[1].split('x').collect();
+    let x = coords[0].parse::<i32>()?;
+    let y = coords[1].parse::<i32>()?;
+    let width = dims[0].parse::<u32>()?;
+    let height = dims[1].parse::<u32>()?;
 
     if !clipboard_only {
         create_dir_all(save_fullpath.parent().unwrap())
             .context("Failed to create screenshot directory")?;
-        let grim_status = Command::new("grim")
-            .arg("-g")
-            .arg(geometry)
-            .arg(save_fullpath)
-            .status()
-            .context("Failed to run grim")?;
-        if !grim_status.success() {
-            return Err(anyhow::anyhow!("grim failed to capture screenshot"));
-        }
-
-        let wl_copy_status = Command::new("wl-copy")
-            .arg("--type")
-            .arg("image/png")
-            .stdin(std::fs::File::open(save_fullpath).context(format!(
-                "Failed to open screenshot file '{}'",
-                save_fullpath.display()
-            ))?)
-            .status()
-            .context("Failed to run wl-copy")?;
-        if !wl_copy_status.success() {
-            return Err(anyhow::anyhow!("wl-copy failed to copy screenshot"));
-        }
-
-        if let Some(cmd) = command {
-            let cmd_status = Command::new(&cmd[0])
-                .args(&cmd[1..])
-                .arg(save_fullpath)
-                .status()
-                .context(format!("Failed to run command '{}'", cmd[0]))?;
-            if !cmd_status.success() {
-                return Err(anyhow::anyhow!("Command '{}' failed", cmd[0]));
-            }
-        }
-    } else {
-        let grim_output = Command::new("grim")
-            .arg("-g")
-            .arg(geometry)
-            .arg("-")
-            .output()
-            .context("Failed to run grim")?;
-        if !grim_output.status.success() {
-            return Err(anyhow::anyhow!("grim failed to capture screenshot"));
-        }
-
-        let mut wl_copy = Command::new("wl-copy")
-            .arg("--type")
-            .arg("image/png")
-            .stdin(Stdio::piped())
-            .spawn()
-            .context("Failed to start wl-copy")?;
-        wl_copy
-            .stdin
-            .as_mut()
-            .unwrap()
-            .write_all(&grim_output.stdout)
-            .context("Failed to write to wl-copy stdin")?;
-        let wl_copy_status = wl_copy.wait().context("Failed to wait for wl-copy")?;
-        if !wl_copy_status.success() {
-            return Err(anyhow::anyhow!("wl-copy failed to copy screenshot"));
-        }
     }
 
+    // Capture screenshot using Wayland
+    let mut screenshot = WaylandScreenshot::new(debug)?;
+    let data = screenshot.capture_region(x, y, width, height)?;
+
+    // Save to file if needed
+    if !clipboard_only {
+        std::fs::write(save_fullpath, &data)
+            .context("Failed to write screenshot to file")?;
+    }
+
+    // Copy to clipboard
+    let mut clipboard = Command::new("wl-copy");
+    clipboard.arg("--type").arg("image/png");
+    let mut child = clipboard
+        .stdin(Stdio::piped())
+        .spawn()
+        .context("Failed to start wl-copy")?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(&data)?;
+    }
+
+    child.wait().context("Failed to wait for wl-copy")?;
+
+    // Show notification
     if !silent {
         let message = if clipboard_only {
             "Image copied to the clipboard".to_string()
@@ -122,217 +146,82 @@ pub fn save_geometry_with_grim(
     Ok(())
 }
 
-#[cfg(feature = "native")]
-pub fn save_geometry_with_native(
-    geometry: &str,
+fn save_geometry_with_portal(
     save_fullpath: &PathBuf,
     clipboard_only: bool,
-    raw: bool,
-    command: Option<Vec<String>>,
     silent: bool,
     notif_timeout: u32,
     debug: bool,
 ) -> Result<()> {
-    use image::{DynamicImage, ImageBuffer, Rgba};
-    use wayland_client::{
-        Connection, Dispatch, QueueHandle,
-        protocol::{wl_compositor::WlCompositor, wl_output::WlOutput, wl_shm::WlShm},
+    use notify_rust::Notification;
+    use std::{
+        fs::{self, File},
+        path::PathBuf,
+        process::{Command, Stdio},
+        time::{SystemTime, UNIX_EPOCH},
     };
-    use wayland_protocols::unstable::screencopy::v1::client::{
-        zwlr_screencopy_frame_v1::ZwlrScreencopyFrameV1,
-        zwlr_screencopy_manager_v1::ZwlrScreencopyManagerV1,
-    };
+
+    let start = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
 
     if debug {
-        eprintln!("Saving geometry with native Wayland: {}", geometry);
+        eprintln!("Capturing screenshot via xdg-desktop-portal...");
     }
 
-    let parts: Vec<&str> = geometry.split(' ').collect();
-    if parts.len() != 2 {
-        return Err(anyhow::anyhow!("Invalid geometry format: '{}'", geometry));
+    let status = Command::new("dbus-send")
+        .args([
+            "--session",
+            "--dest=org.freedesktop.portal.Desktop",
+            "--object-path=/org/freedesktop/portal/desktop",
+            "--print-reply",
+            "org.freedesktop.portal.Screenshot.Screenshot",
+            "string:\"\"",
+            "a{sv}:{}",
+        ])
+        .status()
+        .context("Failed to run dbus-send for screenshot")?;
+
+    if !status.success() {
+        return Err(anyhow::anyhow!("xdg-desktop-portal screenshot failed"));
     }
 
-    let conn = Connection::connect_to_env().context("Failed to connect to Wayland")?;
-    let mut event_queue = conn.new_event_queue();
-    let qh = event_queue.handle();
+    // Search for new file in ~/Pictures
+    let pictures_dir = dirs::picture_dir().unwrap_or_else(|| PathBuf::from("."));
+    let mut found = None;
 
-    let display = conn.display();
-    let globals = conn
-        .get_registry(&qh, ())
-        .context("Failed to get Wayland registry")?;
-
-    struct State {
-        screencopy_manager: Option<ZwlrScreencopyManagerV1>,
-        outputs: Vec<WlOutput>,
-    }
-
-    impl Dispatch<wayland_client::protocol::wl_registry::WlRegistry, ()> for State {
-        fn event(
-            &mut self,
-            registry: &wayland_client::protocol::wl_registry::WlRegistry,
-            event: wayland_client::protocol::wl_registry::Event,
-            _: &(),
-            _: &Connection,
-            qh: &QueueHandle<Self>,
-        ) {
-            if let wayland_client::protocol::wl_registry::Event::Global {
-                name,
-                interface,
-                version,
-            } = event
-            {
-                match interface.as_str() {
-                    "zwlr_screencopy_manager_v1" => {
-                        self.screencopy_manager = Some(
-                            registry.bind::<ZwlrScreencopyManagerV1, _, _>(name, version, qh, ()),
-                        );
-                    }
-                    "wl_output" => {
-                        self.outputs
-                            .push(registry.bind::<WlOutput, _, _>(name, version, qh, ()));
-                    }
-                    _ => {}
-                }
+    for entry in fs::read_dir(&pictures_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().map(|ext| ext == "png").unwrap_or(false) {
+            let metadata = fs::metadata(&path)?;
+            let created = metadata.created().unwrap_or(SystemTime::UNIX_EPOCH);
+            if created.duration_since(UNIX_EPOCH)?.as_secs() >= start {
+                found = Some(path);
+                break;
             }
         }
     }
 
-    let mut state = State {
-        screencopy_manager: None,
-        outputs: vec![],
-    };
-
-    event_queue
-        .roundtrip(&mut state)
-        .context("Failed to initialize Wayland globals")?;
-
-    let screencopy_manager = state
-        .screencopy_manager
-        .context("wlr-screencopy-unstable-v1 not available")?;
-    let output = state.outputs.get(0).context("No outputs found")?;
-
-    let frame = screencopy_manager.capture_output_region(0, output, x, y, width, height, &qh, ());
-
-    struct FrameState {
-        buffer: Option<Vec<u8>>,
-        width: u32,
-        height: u32,
-        format: Option<wayland_client::protocol::wl_shm::Format>,
-    }
-
-    impl Dispatch<ZwlrScreencopyFrameV1, ()> for FrameState {
-        fn event(
-            &mut self,
-            frame: &ZwlrScreencopyFrameV1,
-            event: wayland_protocols::unstable::screencopy::v1::client::zwlr_screencopy_frame_v1::Event,
-            _: &(),
-            _: &Connection,
-            _: &QueueHandle<Self>,
-        ) {
-            match event {
-                zwlr_screencopy_frame_v1::Event::Buffer {
-                    format,
-                    width,
-                    height,
-                    stride,
-                } => {
-                    self.width = width;
-                    self.height = height;
-                    self.format = Some(format);
-                    self.buffer = Some(vec![0u8; (stride * height) as usize]);
-                }
-                zwlr_screencopy_frame_v1::Event::Ready { .. } => {
-                    frame.destroy();
-                }
-                _ => {}
-            }
-        }
-    }
-
-    let mut frame_state = FrameState {
-        buffer: None,
-        width: 0,
-        height: 0,
-        format: None,
-    };
-
-    event_queue
-        .roundtrip(&mut frame_state)
-        .context("Failed to capture frame")?;
-
-    let buffer = frame_state
-        .buffer
-        .context("Failed to receive frame buffer")?;
-    let width = frame_state.width;
-    let height = frame_state.height;
-
-    let img: ImageBuffer<Rgba<u8>, _> = ImageBuffer::from_raw(width, height, buffer)
-        .context("Failed to create image from buffer")?;
-    let dynamic_img = DynamicImage::ImageRgba8(img);
-
-    if raw {
-        let mut stdout = std::io::stdout();
-        dynamic_img
-            .write_to(&mut stdout, image::ImageOutputFormat::Png)
-            .context("Failed to write raw image to stdout")?;
-        return Ok(());
-    }
+    let found_path = found.ok_or_else(|| anyhow::anyhow!("No screenshot found after portal capture"))?;
 
     if !clipboard_only {
-        create_dir_all(save_fullpath.parent().unwrap())
-            .context("Failed to create screenshot directory")?;
-        dynamic_img.save(save_fullpath).context(format!(
-            "Failed to save screenshot to '{}'",
-            save_fullpath.display()
-        ))?;
+        fs::create_dir_all(save_fullpath.parent().unwrap())?;
+        fs::copy(&found_path, save_fullpath)?;
+    }
 
-        let wl_copy_status = Command::new("wl-copy")
-            .arg("--type")
-            .arg("image/png")
-            .stdin(std::fs::File::open(save_fullpath).context(format!(
-                "Failed to open screenshot file '{}'",
-                save_fullpath.display()
-            ))?)
-            .status()
-            .context("Failed to run wl-copy")?;
-        if !wl_copy_status.success() {
-            return Err(anyhow::anyhow!("wl-copy failed to copy screenshot"));
-        }
-
-        if let Some(cmd) = command {
-            let cmd_status = Command::new(&cmd[0])
-                .args(&cmd[1..])
-                .arg(save_fullpath)
-                .status()
-                .context(format!("Failed to run command '{}'", cmd[0]))?;
-            if !cmd_status.success() {
-                return Err(anyhow::anyhow!("Command '{}' failed", cmd[0]));
-            }
-        }
-    } else {
-        let mut buffer = Vec::new();
-        dynamic_img
-            .write_to(
-                &mut std::io::Cursor::new(&mut buffer),
-                image::ImageOutputFormat::Png,
-            )
-            .context("Failed to encode image to PNG")?;
-
+    if clipboard_only {
         let mut wl_copy = Command::new("wl-copy")
             .arg("--type")
             .arg("image/png")
             .stdin(Stdio::piped())
             .spawn()
             .context("Failed to start wl-copy")?;
-        wl_copy
-            .stdin
-            .as_mut()
-            .unwrap()
-            .write_all(&buffer)
-            .context("Failed to write to wl-copy stdin")?;
-        let wl_copy_status = wl_copy.wait().context("Failed to wait for wl-copy")?;
-        if !wl_copy_status.success() {
-            return Err(anyhow::anyhow!("wl-copy failed to copy screenshot"));
+
+        let mut input = File::open(&found_path)?;
+        let mut stdin = wl_copy.stdin.take().ok_or_else(|| anyhow::anyhow!("Failed to open wl-copy stdin"))?;
+        std::io::copy(&mut input, &mut stdin)?;
+        let status = wl_copy.wait()?;
+        if !status.success() {
+            return Err(anyhow::anyhow!("wl-copy failed"));
         }
     }
 
@@ -340,19 +229,17 @@ pub fn save_geometry_with_native(
         let message = if clipboard_only {
             "Image copied to the clipboard".to_string()
         } else {
-            format!(
-                "Image saved in <i>{}</i> and copied to the clipboard.",
-                save_fullpath.display()
-            )
+            format!("Image saved in <i>{}</i>", save_fullpath.display())
         };
+
         Notification::new()
             .summary("Screenshot saved")
             .body(&message)
-            .icon(save_fullpath.to_str().unwrap_or("screenshot"))
+            .icon("screenshot")
             .timeout(notif_timeout as i32)
             .appname("Hyprshot-rs")
             .show()
-            .context("Failed to show notification")?;
+            .ok(); // Ignore failure
     }
 
     Ok(())

@@ -1,3 +1,5 @@
+// The `core` crate is implicitly linked, no need for explicit import
+
 use anyhow::{Context, Result};
 use chrono::Local;
 use clap::{Parser, ValueEnum};
@@ -5,80 +7,54 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::thread::sleep;
 use std::time::Duration;
+use log::LevelFilter;
 
+mod wayland;
+mod grim;
+mod environment;
+mod desktop;
 mod capture;
 mod save;
 mod utils;
 
-#[derive(Parser)]
-#[command(
-    name = "hyprshot-rs",
-    about = "Utility to easily take screenshots in Hyprland"
-)]
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
 struct Args {
-    #[arg(short, long, help = "Show help message")]
-    help: bool,
+    /// Mode to use (output, region, window)
+    #[arg(short, long)]
+    mode: String,
 
-    #[arg(
-        short = 'm',
-        long,
-        help = "Mode: output, window, region, active, or OUTPUT_NAME"
-    )]
-    mode: Vec<Mode>,
+    /// Save directory
+    #[arg(short, long)]
+    save_dir: Option<PathBuf>,
 
-    #[arg(short, long, help = "Directory to save screenshot")]
-    output_folder: Option<PathBuf>,
-
-    #[arg(short, long, help = "Filename of the screenshot")]
+    /// Save filename
+    #[arg(short, long)]
     filename: Option<String>,
 
-    #[arg(short = 'D', long, help = "Delay before taking screenshot (seconds)")]
-    delay: Option<u64>,
-
-    #[arg(long, help = "Freeze the screen on initialization")]
-    freeze: bool,
-
-    #[arg(short, long, help = "Print debug information")]
-    debug: bool,
-
-    #[arg(short, long, help = "Don't send notification")]
-    silent: bool,
-
-    #[arg(short, long, help = "Output raw image data to stdout")]
-    raw: bool,
-
-    #[arg(
-        short,
-        long,
-        default_value = "5000",
-        help = "Notification timeout (ms)"
-    )]
-    notif_timeout: u32,
-
-    #[arg(long, help = "Copy to clipboard and don't save to disk")]
+    /// Only copy to clipboard
+    #[arg(short, long)]
     clipboard_only: bool,
 
-    #[arg(last = true, help = "Command to open screenshot (e.g., 'mirage')")]
-    command: Vec<String>,
-}
+    /// Raw output
+    #[arg(short, long)]
+    raw: bool,
 
-impl std::fmt::Debug for Args {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Args")
-            .field("help", &self.help)
-            .field("mode", &self.mode)
-            .field("output_folder", &self.output_folder)
-            .field("filename", &self.filename)
-            .field("delay", &self.delay)
-            .field("freeze", &self.freeze)
-            .field("debug", &self.debug)
-            .field("silent", &self.silent)
-            .field("raw", &self.raw)
-            .field("notif_timeout", &self.notif_timeout)
-            .field("clipboard_only", &self.clipboard_only)
-            .field("command", &self.command)
-            .finish()
-    }
+    /// Command to run after taking screenshot
+    #[arg(short, long)]
+    command: Option<Vec<String>>,
+
+    /// Silent mode (no notifications)
+    #[arg(short, long)]
+    silent: bool,
+
+    /// Notification timeout in milliseconds
+    #[arg(short, long, default_value_t = 5000)]
+    notif_timeout: u32,
+
+    /// Debug mode
+    #[arg(short, long)]
+    debug: bool,
 }
 
 #[derive(Clone, Debug, ValueEnum)]
@@ -92,107 +68,72 @@ enum Mode {
 }
 
 fn main() -> Result<()> {
+    // Initialize logger
+    if std::env::var("RUST_LOG").is_err() {
+        std::env::set_var("RUST_LOG", "debug");
+    }
+    simple_logger::init_with_level(log::Level::Debug)?;
+
     let args = Args::parse();
 
-    let debug = args.debug;
-    let clipboard_only = args.clipboard_only;
-    let silent = args.silent;
-    let raw = args.raw;
-    let notif_timeout = args.notif_timeout;
-    let freeze = args.freeze;
-    let delay = args.delay.unwrap_or(0);
-    let command = if args.command.is_empty() {
-        None
-    } else {
-        Some(args.command)
-    };
+    let save_dir = args.save_dir.unwrap_or_else(|| {
+        dirs::picture_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+    });
 
-    let mut option: Option<Mode> = None;
-    let mut current = false;
-    let mut selected_monitor: Option<String> = None;
-
-    for mode in args.mode {
-        match mode {
-            Mode::Output | Mode::Window | Mode::Region => option = Some(mode),
-            Mode::Active => current = true,
-            Mode::OutputName(name) => {
-                if utils::is_valid_monitor(&name)? {
-                    selected_monitor = Some(name);
-                }
-            }
-        }
-    }
-
-    let option = option.context("A mode is required (output, region, window)")?;
-
-    let save_dir = args
-        .output_folder
-        .unwrap_or_else(|| dirs::picture_dir().unwrap_or_else(|| PathBuf::from("~")));
     let filename = args.filename.unwrap_or_else(|| {
         Local::now()
             .format("%Y-%m-%d-%H%M%S_hyprshot.png")
             .to_string()
     });
-    let save_fullpath = save_dir.join(&filename);
 
-    if debug && !clipboard_only {
-        eprintln!("Saving in: {}", save_fullpath.display());
+    let save_fullpath = save_dir.join(filename);
+
+    if args.debug {
+        println!("Saving in: {}", save_fullpath.display());
     }
 
-    let hyprpicker_pid = if freeze && Command::new("hyprpicker").output().is_ok() {
-        let pid = Command::new("hyprpicker")
-            .args(["-r", "-z"])
-            .spawn()
-            .context("Failed to start hyprpicker")?
-            .id();
-        sleep(Duration::from_millis(200));
-        Some(pid)
-    } else {
-        None
-    };
+    match args.mode.as_str() {
+        "output" => {
+            // TODO: Implement output mode
+            unimplemented!("Output mode not implemented yet");
+        }
+        "region" => {
+            // Get region geometry from slurp
+            let output = std::process::Command::new("slurp")
+                .output()
+                .map_err(|e| anyhow::anyhow!("Failed to run slurp: {}", e))?;
 
-    if delay > 0 {
-        sleep(Duration::from_secs(delay));
-    }
-
-    let geometry = match option {
-        Mode::Output => {
-            if current {
-                capture::grab_active_output(debug)?
-            } else if let Some(monitor) = selected_monitor {
-                capture::grab_selected_output(&monitor, debug)?
-            } else {
-                capture::grab_output(debug)?
+            if !output.status.success() {
+                return Ok(());
             }
-        }
-        Mode::Region => capture::grab_region(debug)?,
-        Mode::Window => {
-            let geo = if current {
-                capture::grab_active_window(debug)?
-            } else {
-                capture::grab_window(debug)?
-            };
-            utils::trim(&geo, debug)?
-        }
-        _ => unreachable!(),
-    };
 
-    save::save_geometry(
-        &geometry,
-        &save_fullpath,
-        clipboard_only,
-        raw,
-        command,
-        silent,
-        notif_timeout,
-        debug,
-    )?;
+            let geometry = String::from_utf8_lossy(&output.stdout)
+                .trim()
+                .to_string();
 
-    if let Some(pid) = hyprpicker_pid {
-        Command::new("kill")
-            .arg(pid.to_string())
-            .status()
-            .context("Failed to kill hyprpicker")?;
+            if args.debug {
+                println!("Region geometry: {}", geometry);
+            }
+
+            save::save_geometry(
+                &geometry,
+                &save_fullpath,
+                args.clipboard_only,
+                args.raw,
+                args.command,
+                args.silent,
+                args.notif_timeout,
+                args.debug,
+            )?;
+        }
+        "window" => {
+            // TODO: Implement window mode
+            unimplemented!("Window mode not implemented yet");
+        }
+        _ => {
+            return Err(anyhow::anyhow!("Invalid mode: {}", args.mode));
+        }
     }
 
     Ok(())
@@ -214,6 +155,7 @@ Examples:
 
 Options:
   -h, --help                show help message
+  -v, --version             show version information
   -m, --mode                one of: output, window, region, active, OUTPUT_NAME
   -o, --output-folder       directory in which to save screenshot
   -f, --filename            the file name of the resulting screenshot
